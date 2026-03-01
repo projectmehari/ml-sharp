@@ -6,177 +6,7 @@
 <title>SharpView · Monocular 3DGS</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js">
-// ─── DEPTH MAP ────────────────────────────────────────────────────────────────
-function showDepthMap(b64) {
-  const panel = document.getElementById('depthPanel');
-  const img = document.getElementById('depthImg');
-  const status = document.getElementById('depthStatus');
-  img.src = 'data:image/png;base64,' + b64;
-  panel.classList.add('visible');
-  status.textContent = 'received';
-}
-
-// ─── DEPTH FOG (ambient occlusion simulation) ─────────────────────────────────
-function applyDepthFog(cloud) {
-  if (!cloud || !scene3D) return;
-  // Modify point material to fade distant points via fog
-  scene3D.fog = new THREE.FogExp2(0xeae6de, 0.18);
-  if (cloud.material) {
-    cloud.material.fog = true;
-    cloud.material.needsUpdate = true;
-  }
-}
-
-function removeDepthFog() {
-  if (scene3D) scene3D.fog = null;
-  if (pointCloud && pointCloud.material) {
-    pointCloud.material.fog = false;
-    pointCloud.material.needsUpdate = true;
-  }
-}
-
-let fogEnabled = false;
-function toggleFog() {
-  fogEnabled = !fogEnabled;
-  if (fogEnabled) applyDepthFog(pointCloud);
-  else removeDepthFog();
-  const btn = document.getElementById('btnFog');
-  if (btn) btn.classList.toggle('active', fogEnabled);
-}
-
-// ─── SCREENSHOT ───────────────────────────────────────────────────────────────
-function takeScreenshot() {
-  if (!renderer3D) return;
-  // Force a render with preserveDrawingBuffer
-  renderer3D.render(scene3D, camera3D);
-  const dataURL = renderer3D.domElement.toDataURL('image/png');
-  const a = document.createElement('a');
-  a.href = dataURL;
-  const name = document.getElementById('fnVal').textContent || 'sharpview';
-  a.download = `sharpview_${name.replace(/\.\w+$/, '')}.png`;
-  a.click();
-  addLog('ok', 'screenshot saved · PNG');
-}
-
-// ─── SHARE LINK ───────────────────────────────────────────────────────────────
-function shareLink() {
-  if (!currentShareId) return;
-
-  // Check URL params — if we're on Vercel, use the vercel domain
-  const origin = window.location.origin.includes('localhost') || window.location.origin.startsWith('file')
-    ? 'https://ml-sharp.vercel.app'
-    : window.location.origin;
-
-  const shareUrl = `${origin}?share=${currentShareId}`;
-
-  document.getElementById('shareLinkInput').value = shareUrl;
-  document.getElementById('shareToast').classList.add('visible');
-  addLog('ok', `share link ready · id ${currentShareId}`);
-}
-
-function copyShareLink() {
-  const input = document.getElementById('shareLinkInput');
-  navigator.clipboard.writeText(input.value).then(() => {
-    const btn = document.querySelector('.share-toast-copy');
-    btn.textContent = 'Copied!';
-    setTimeout(() => { btn.textContent = 'Copy'; }, 1800);
-  });
-}
-
-function closeShareToast() {
-  document.getElementById('shareToast').classList.remove('visible');
-}
-
-// ─── LOAD FROM SHARE ID ───────────────────────────────────────────────────────
-async function loadFromShareId(shareId) {
-  addLog('info', `loading shared splat · ${shareId}…`);
-  setStatusBadge('complete', 'Loading…');
-  setProgress('indeterminate');
-  try {
-    const resp = await fetch(`${MODAL_BASE}/share/${shareId}`);
-    if (!resp.ok) throw new Error('Share not found or expired');
-    const buf = await resp.arrayBuffer();
-    generatedPLYBuffer = buf;
-    currentShareId = shareId;
-    renderPLYToScene(buf);
-    enableExports();
-    document.getElementById('screenshotBtn').disabled = false;
-    document.getElementById('shareBtn').disabled = false;
-    setProgress('complete');
-    addLog('ok', `loaded shared splat · ${shareId}`);
-    setStatusBadge('complete', 'Loaded');
-  } catch (e) {
-    addLog('err', e.message);
-    setStatusBadge('complete', 'Error');
-    setProgress('reset');
-  }
-}
-
-// ─── AUTO-LOAD SHARE PARAM ────────────────────────────────────────────────────
-(function checkShareParam() {
-  const params = new URLSearchParams(window.location.search);
-  const shareId = params.get('share');
-  if (shareId) {
-    // wait for page to be ready
-    setTimeout(() => loadFromShareId(shareId), 400);
-  }
-})();
-
-// ─── MINIMAP ─────────────────────────────────────────────────────────────────
-let minimapRenderer = null, minimapCamera = null, minimapScene = null;
-
-function initMinimap() {
-  const canvas = document.getElementById('minimapCanvas');
-  if (!canvas || minimapRenderer) return;
-
-  minimapRenderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: true });
-  minimapRenderer.setSize(80, 80);
-  minimapRenderer.setClearColor(0xeae6de, 0.0);
-
-  minimapCamera = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.01, 100);
-  minimapCamera.position.set(0, 8, 0); // top-down
-  minimapCamera.lookAt(0, 0, 0);
-
-  minimapScene = new THREE.Scene();
-  document.getElementById('minimapWrap').style.display = 'block';
-}
-
-function updateMinimap() {
-  if (!minimapRenderer || !minimapScene || !minimapCamera) return;
-
-  // Sync minimap scene with main scene objects
-  while (minimapScene.children.length) minimapScene.remove(minimapScene.children[0]);
-
-  if (pointCloud) {
-    // Clone point cloud into minimap with smaller points
-    const miniGeo = pointCloud.geometry.clone();
-    const miniMat = new THREE.PointsMaterial({
-      size: 0.04,
-      vertexColors: true,
-      sizeAttenuation: true,
-    });
-    const miniCloud = new THREE.Points(miniGeo, miniMat);
-    miniCloud.rotation.copy(pointCloud.rotation);
-    miniCloud.position.copy(pointCloud.position);
-    miniCloud.scale.copy(pointCloud.scale);
-    minimapScene.add(miniCloud);
-  }
-
-  // Camera frustum indicator
-  if (camera3D) {
-    const geo = new THREE.ConeGeometry(0.15, 0.4, 4);
-    const mat = new THREE.MeshBasicMaterial({ color: 0xb8864a, wireframe: true });
-    const cone = new THREE.Mesh(geo, mat);
-    cone.position.set(panX, 0, zoom * 0.3);
-    cone.rotation.x = Math.PI / 2;
-    minimapScene.add(cone);
-  }
-
-  minimapRenderer.render(minimapScene, minimapCamera);
-}
-
-</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -573,6 +403,7 @@ function updateMinimap() {
     cursor: grab;
     display: none;
     background: transparent;
+    touch-action: none;
   }
   #canvas3d:active { cursor: grabbing; }
 
@@ -797,7 +628,7 @@ function updateMinimap() {
     .viewer-controls { flex-wrap: wrap; gap: 6px; }
     .density-bar { padding: 8px 16px 10px; }
     .export-bar { flex-wrap: wrap; gap: 6px; }
-    touch-action: none;
+    #canvas3d { touch-action: none; }
   }
 
   /* ─── DEPTH MAP PREVIEW ─── */
@@ -847,7 +678,7 @@ function updateMinimap() {
   /* ─── MINIMAP ─── */
   .minimap-wrap {
     position: absolute;
-    bottom: 130px;
+    bottom: 114px;
     right: 12px;
     width: 80px;
     height: 80px;
@@ -1130,6 +961,7 @@ let renderMode = 'points';
 let timerInterval = null;
 let generatedPLYBuffer = null;
 let currentShareId = null;
+let animFrame = 0;
 const MODAL_BASE = 'https://projectmehari--sharpview-serve.modal.run';
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -1256,14 +1088,24 @@ async function runInference() {
     }
 
     const elapsed = stopTimer();
-    const json = await resp.json();
 
-    // Decode PLY from base64
-    const plyBuffer = base64ToArrayBuffer(json.ply_b64);
+    // Handle both old binary PLY response AND new JSON envelope
+    const contentType = resp.headers.get('content-type') || '';
+    let plyBuffer, shareId = null, depthB64 = null;
+
+    if (contentType.includes('application/json')) {
+      // New backend: JSON with base64 PLY + depth + share_id
+      const json = await resp.json();
+      plyBuffer = base64ToArrayBuffer(json.ply_b64);
+      shareId = json.share_id || null;
+      depthB64 = json.depth_b64 || null;
+    } else {
+      // Old backend: raw binary PLY
+      plyBuffer = await resp.arrayBuffer();
+    }
+
     generatedPLYBuffer = plyBuffer;
-
-    // Store share ID
-    currentShareId = json.share_id || null;
+    currentShareId = shareId;
 
     const kb = (plyBuffer.byteLength / 1024).toFixed(0);
     document.getElementById('plySize').textContent = `${kb}kb`;
@@ -1274,14 +1116,12 @@ async function runInference() {
     renderPLYToScene(plyBuffer);
     enableExports();
 
-    // Show depth map if available
-    if (json.depth_b64) {
-      showDepthMap(json.depth_b64);
-    }
+    // Show depth map if available (new backend only)
+    if (depthB64) showDepthMap(depthB64);
 
-    // Enable screenshot + share
+    // Enable screenshot always, share only if we have an ID
     document.getElementById('screenshotBtn').disabled = false;
-    if (currentShareId) document.getElementById('shareBtn').disabled = false;
+    if (shareId) document.getElementById('shareBtn').disabled = false;
 
     document.getElementById('statusLabel').textContent = 'complete';
 
@@ -1368,6 +1208,69 @@ function setupOrbit(canvas) {
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 }
 
+// ─── MINIMAP ─────────────────────────────────────────────────────────────────
+let minimapRenderer = null, minimapCamera = null, minimapScene = null;
+let minimapCloud = null, minimapCone = null;
+let minimapNeedsRebuild = false;
+
+function initMinimap() {
+  const canvas = document.getElementById('minimapCanvas');
+  if (!canvas || minimapRenderer) return;
+
+  minimapRenderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: true });
+  minimapRenderer.setSize(80, 80);
+  minimapRenderer.setClearColor(0xeae6de, 0.0);
+
+  minimapCamera = new THREE.OrthographicCamera(-2.5, 2.5, 2.5, -2.5, 0.01, 200);
+  minimapCamera.position.set(0, 10, 0);
+  minimapCamera.lookAt(0, 0, 0);
+
+  minimapScene = new THREE.Scene();
+  document.getElementById('minimapWrap').style.display = 'block';
+}
+
+// Call this once after a new point cloud is loaded — shares geometry, no clone
+function rebuildMinimapCloud() {
+  if (!minimapScene) return;
+  if (minimapCloud) { minimapScene.remove(minimapCloud); minimapCloud = null; }
+  if (minimapCone)  { minimapScene.remove(minimapCone);  minimapCone = null; }
+
+  if (pointCloud) {
+    // SHARE the geometry (no clone) — just use a different material + scale
+    const miniMat = new THREE.PointsMaterial({
+      size: 0.03, vertexColors: true, sizeAttenuation: true,
+    });
+    minimapCloud = new THREE.Points(pointCloud.geometry, miniMat);
+    minimapScene.add(minimapCloud);
+  }
+
+  // Camera cone indicator
+  const geo = new THREE.ConeGeometry(0.12, 0.35, 4);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xb8864a, wireframe: true });
+  minimapCone = new THREE.Mesh(geo, mat);
+  minimapCone.rotation.x = Math.PI / 2;
+  minimapScene.add(minimapCone);
+  minimapNeedsRebuild = false;
+}
+
+function updateMinimap() {
+  if (!minimapRenderer || !minimapScene || !minimapCamera) return;
+  if (minimapNeedsRebuild) rebuildMinimapCloud();
+  if (!minimapCloud) return;
+
+  // Just sync transform — no geometry work
+  minimapCloud.rotation.copy(pointCloud.rotation);
+  minimapCloud.position.copy(pointCloud.position);
+  minimapCloud.scale.copy(pointCloud.scale);
+
+  // Move camera cone to show viewer position
+  if (minimapCone) {
+    minimapCone.position.set(panX, 0, Math.min(zoom * 0.25, 2));
+  }
+
+  minimapRenderer.render(minimapScene, minimapCamera);
+}
+
 // animate() is defined below with auto-rotate support
 
 // ─── PLY PARSER ──────────────────────────────────────────────────────────────
@@ -1423,9 +1326,12 @@ function renderPLYToScene(buffer) {
 
     addLog('ok', `rendered · ${(N / 1000).toFixed(0)}k points`);
 
+    // Signal minimap to rebuild with new cloud (shares geometry, no clone)
+    minimapNeedsRebuild = true;
+
     // Reset camera to centered front view
     zoom = 2.8;
-    rotX = 0.15; // slight downward tilt for natural perspective
+    rotX = 0; // no initial tilt — scene faces camera
     rotY = 0;
     panX = 0; panY = 0;
     if (camera3D) camera3D.position.z = zoom;
@@ -1734,20 +1640,18 @@ function setViewMode(mode) {
   document.getElementById('btnStill').classList.toggle('active', mode === 'still');
 }
 
-// Hook into animate loop for auto-rotate
-const _origAnimate = animate;
+// ─── ANIMATE LOOP ─────────────────────────────────────────────────────────────
 function animate() {
   requestAnimationFrame(animate);
+  animFrame++;
   applyWASD();
   if (viewMode === 'axes' && pointCloud && !orbitState.active) {
     pointCloud.rotation.y += autoRotateSpeed;
     rotY = pointCloud.rotation.y;
   }
   if (renderer3D && scene3D && camera3D) renderer3D.render(scene3D, camera3D);
-  // Update minimap every 3 frames to save perf
-  if (Math.random() < 0.33) updateMinimap();
+  if (animFrame % 30 === 0) updateMinimap();
 }
-
 
 // ─── ZOOM BUTTONS + KEYBOARD ─────────────────────────────────────────────────
 function zoomStep(dir) {
@@ -1763,14 +1667,12 @@ window.addEventListener('keydown', e => {
   keysHeld[e.key.toLowerCase()] = true;
   if (e.key === '+' || e.key === '=') zoomStep(-1);
   if (e.key === '-' || e.key === '_') zoomStep(1);
-  // Prevent page scroll on arrow/space keys when canvas is focused
   if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(e.key.toLowerCase())) {
     e.preventDefault();
   }
 });
 window.addEventListener('keyup', e => { keysHeld[e.key.toLowerCase()] = false; });
 
-// Called every frame from animate()
 function applyWASD() {
   if (!pointCloud) return;
   const speed = 0.012;
@@ -1834,32 +1736,127 @@ function setDensity(val) {
   const ratio = parseFloat(val);
   document.getElementById('densityVal').textContent = ratio.toFixed(2) + 'x';
   if (!pointCloud || !fullPositions) return;
-
   const totalN = fullPositions.length / 3;
   const keepN = Math.max(100, Math.floor(totalN * ratio));
-
   if (keepN >= totalN) {
-    // Show all
     pointCloud.geometry.setAttribute('position', new THREE.Float32BufferAttribute(fullPositions, 3));
     pointCloud.geometry.setAttribute('color', new THREE.Float32BufferAttribute(fullColors, 3));
   } else {
-    // Subsample evenly
     const step = totalN / keepN;
     const pos = new Float32Array(keepN * 3);
     const col = new Float32Array(keepN * 3);
     for (let i = 0; i < keepN; i++) {
       const src = Math.floor(i * step);
-      pos[i*3] = fullPositions[src*3]; pos[i*3+1] = fullPositions[src*3+1]; pos[i*3+2] = fullPositions[src*3+2];
-      col[i*3] = fullColors[src*3]; col[i*3+1] = fullColors[src*3+1]; col[i*3+2] = fullColors[src*3+2];
+      pos[i*3]   = fullPositions[src*3];   pos[i*3+1] = fullPositions[src*3+1]; pos[i*3+2] = fullPositions[src*3+2];
+      col[i*3]   = fullColors[src*3];      col[i*3+1] = fullColors[src*3+1];    col[i*3+2] = fullColors[src*3+2];
     }
     pointCloud.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     pointCloud.geometry.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   }
   pointCloud.geometry.attributes.position.needsUpdate = true;
   pointCloud.geometry.attributes.color.needsUpdate = true;
-  document.getElementById('pointCount').innerHTML =
-    `<span>${(keepN/1000).toFixed(0)}k</span> gaussians`;
+  document.getElementById('pointCount').innerHTML = `<span>${(keepN/1000).toFixed(0)}k</span> gaussians`;
 }
+
+// ─── DEPTH MAP PREVIEW ────────────────────────────────────────────────────────
+function showDepthMap(b64) {
+  const panel = document.getElementById('depthPanel');
+  const img   = document.getElementById('depthImg');
+  const status = document.getElementById('depthStatus');
+  img.src = 'data:image/png;base64,' + b64;
+  panel.classList.add('visible');
+  if (status) status.textContent = 'received';
+}
+
+// ─── DEPTH FOG ────────────────────────────────────────────────────────────────
+// Dark fog so distant points fade to depth, not to the light background.
+function applyDepthFog() {
+  if (!scene3D) return;
+  scene3D.fog = new THREE.FogExp2(0x1a1810, 0.18);
+  if (pointCloud && pointCloud.material) { pointCloud.material.fog = true; pointCloud.material.needsUpdate = true; }
+}
+
+function removeDepthFog() {
+  if (scene3D) scene3D.fog = null;
+  if (pointCloud && pointCloud.material) { pointCloud.material.fog = false; pointCloud.material.needsUpdate = true; }
+}
+
+let fogEnabled = false;
+function toggleFog() {
+  fogEnabled = !fogEnabled;
+  if (fogEnabled) applyDepthFog(); else removeDepthFog();
+  const btn = document.getElementById('btnFog');
+  if (btn) btn.classList.toggle('active', fogEnabled);
+}
+
+// ─── SCREENSHOT ───────────────────────────────────────────────────────────────
+function takeScreenshot() {
+  if (!renderer3D) return;
+  renderer3D.render(scene3D, camera3D);
+  const dataURL = renderer3D.domElement.toDataURL('image/png');
+  const a = document.createElement('a');
+  a.href = dataURL;
+  const name = document.getElementById('fnVal').textContent || 'sharpview';
+  a.download = `sharpview_${name.replace(/\.\w+$/, '')}.png`;
+  a.click();
+  addLog('ok', 'screenshot saved · PNG');
+}
+
+// ─── SHARE LINK ───────────────────────────────────────────────────────────────
+function shareLink() {
+  if (!currentShareId) return;
+  const origin = (window.location.origin === 'null' || window.location.origin.startsWith('file'))
+    ? 'https://ml-sharp.vercel.app'
+    : window.location.origin;
+  const shareUrl = `${origin}?share=${currentShareId}`;
+  document.getElementById('shareLinkInput').value = shareUrl;
+  document.getElementById('shareToast').classList.add('visible');
+  addLog('ok', `share link ready · id ${currentShareId}`);
+}
+
+function copyShareLink() {
+  const input = document.getElementById('shareLinkInput');
+  navigator.clipboard.writeText(input.value).then(() => {
+    const btn = document.querySelector('.share-toast-copy');
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1800);
+  });
+}
+
+function closeShareToast() {
+  document.getElementById('shareToast').classList.remove('visible');
+}
+
+// ─── LOAD FROM SHARE ID ───────────────────────────────────────────────────────
+async function loadFromShareId(shareId) {
+  addLog('info', `loading shared splat · ${shareId}…`);
+  setStatusBadge('complete', 'Loading…');
+  if (renderer3D) setProgress('indeterminate');
+  try {
+    const resp = await fetch(`${MODAL_BASE}/share/${shareId}`);
+    if (!resp.ok) throw new Error('Share not found or expired');
+    const buf = await resp.arrayBuffer();
+    generatedPLYBuffer = buf;
+    currentShareId = shareId;
+    renderPLYToScene(buf);
+    enableExports();
+    document.getElementById('screenshotBtn').disabled = false;
+    document.getElementById('shareBtn').disabled = false;
+    setProgress('complete');
+    addLog('ok', `loaded shared splat · ${shareId}`);
+    setStatusBadge('complete', 'Loaded');
+  } catch (e) {
+    addLog('err', e.message);
+    setStatusBadge('complete', 'Error');
+  }
+}
+
+// ─── AUTO-LOAD SHARE PARAM (safe: waits for DOM ready) ────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  const params = new URLSearchParams(window.location.search);
+  const shareId = params.get('share');
+  if (shareId) loadFromShareId(shareId);
+});
 
 </script>
   <div class="share-toast" id="shareToast">

@@ -147,11 +147,12 @@ async def predict(request: Request):
             import base64
             depth_b64 = base64.b64encode(depth_bytes).decode()
 
-        # Store in Modal Dict for shareable links (TTL: 7 days via key prefix)
+        # Store in Modal Dict — encode PLY as base64 string (Modal Dict handles str/dicts reliably; raw bytes can fail)
+        import base64 as _b64
         share_id = str(uuid.uuid4())[:8]
         try:
             ply_store[share_id] = {
-                "ply": ply_bytes,
+                "ply_b64": _b64.b64encode(ply_bytes).decode(),
                 "filename": pathlib.Path(filename).stem,
                 "created": time.time(),
             }
@@ -175,31 +176,40 @@ async def predict(request: Request):
 @fastapi_app.get("/share/{share_id}")
 async def get_share(share_id: str):
     """Return the PLY file for a given share ID."""
+    import base64 as _b64
     try:
         entry = ply_store[share_id]
     except KeyError:
         return JSONResponse({"error": "share not found or expired"}, status_code=404)
 
+    # Support both old (raw bytes) and new (base64 string) storage formats
+    ply_data = entry.get("ply_b64")
+    if ply_data:
+        ply_bytes = _b64.b64decode(ply_data)
+    else:
+        ply_bytes = entry.get("ply", b"")
+
     return Response(
-        content=entry["ply"],
+        content=ply_bytes,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{entry["filename"]}.ply"'},
+        headers={"Content-Disposition": f'attachment; filename="{entry.get("filename","output")}.ply"'},
     )
 
 
 @fastapi_app.get("/share/{share_id}/info")
 async def get_share_info(share_id: str):
     """Return metadata for a share link."""
-    import time
+    import time, base64 as _b64
     try:
         entry = ply_store[share_id]
     except KeyError:
         return JSONResponse({"error": "not found"}, status_code=404)
+    ply_size = len(_b64.b64decode(entry["ply_b64"])) if "ply_b64" in entry else len(entry.get("ply", b""))
     return {
         "share_id": share_id,
         "filename": entry.get("filename"),
         "created": entry.get("created"),
-        "ply_size": len(entry["ply"]),
+        "ply_size": ply_size,
     }
 
 
