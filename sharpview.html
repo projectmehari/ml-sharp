@@ -854,7 +854,7 @@ function renderPLYToScene(buffer) {
       vertexColors: true,
       sizeAttenuation: true,
     }));
-    pointCloud.scale.setScalar(scale);
+    pointCloud.scale.set(scale, -scale, scale); // flip Y: SHARP outputs Y-down
     scene3D.add(pointCloud);
 
     document.getElementById('pointCount').innerHTML =
