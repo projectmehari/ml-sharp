@@ -667,9 +667,92 @@
 
   /* ─── MOBILE ─── */
   @media (max-width: 768px) {
-    .viewer-controls { flex-wrap: wrap; gap: 6px; }
-    .density-bar { padding: 8px 16px 10px; }
-    #canvas3d { touch-action: none; }
+    /* Canvas */
+    #canvas3d { touch-action: none; min-height: 300px; }
+    .viewer-panel { min-height: 500px; }
+    .canvas-placeholder { min-height: 280px; }
+
+    /* Controls: two-row layout */
+    .viewer-controls {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0;
+      padding: 0;
+    }
+
+    /* Row 1: view mode buttons */
+    .controls-left {
+      display: flex;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      gap: 0;
+      border-bottom: 1px solid var(--glass-border);
+    }
+    .controls-left::-webkit-scrollbar { display: none; }
+    .controls-left .ctrl-btn {
+      flex: 1 0 auto;
+      border-radius: 0;
+      border-top: none;
+      border-left: none;
+      border-bottom: none;
+      border-right: 1px solid var(--glass-border);
+      padding: 10px 12px;
+      font-size: 10px;
+      white-space: nowrap;
+    }
+    .controls-left .ctrl-btn:last-child { border-right: none; }
+
+    /* Row 2: action buttons + zoom */
+    .controls-right {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      padding: 0;
+    }
+    .viewer-actions {
+      display: flex;
+      flex: 1;
+      gap: 0;
+    }
+    .action-btn {
+      flex: 1;
+      border-radius: 0;
+      border-top: none;
+      border-left: none;
+      border-bottom: none;
+      border-right: 1px solid var(--glass-border);
+      padding: 10px 4px;
+      font-size: 9px;
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+      text-align: center;
+    }
+    .zoom-btns {
+      display: flex;
+      flex-shrink: 0;
+      gap: 0;
+      border-left: 1px solid var(--glass-border);
+    }
+    .zoom-btn {
+      width: 36px;
+      height: 40px;
+      border-radius: 0;
+      border: none;
+      border-right: 1px solid var(--glass-border);
+      font-size: 16px;
+    }
+    .zoom-btn:last-child { border-right: none; }
+    .point-count { display: none; }
+
+    /* Density bar */
+    .density-bar { padding: 8px 12px 10px; }
+  }
+
+  @media (max-width: 400px) {
+    .controls-left .ctrl-btn { padding: 10px 10px; font-size: 9px; }
+    .action-btn { font-size: 8px; padding: 10px 2px; }
   }
 
   /* ─── DEPTH MAP PREVIEW ─── */
@@ -828,13 +911,7 @@
   }
   .share-toast-copy:hover { background: rgba(255,255,255,0.3); }
 
-  /* Very small phones */
-  @media (max-width: 400px) {
-    .ctrl-btn { padding: 6px 8px; min-width: 44px; }
-    .action-btn { font-size: 9px; padding: 7px 4px; }
-    header { padding: 10px 12px; }
-    .scene-id { font-size: 18px; }
-  }
+
 </style>
 </head>
 <body>
@@ -2071,28 +2148,8 @@ function loadSampleImage() {
   if (cta) cta.classList.add('visible');
   document.getElementById('uploadOwnBtn').addEventListener('click', () => fileInput.click());
 
-  // Sample splat button — always show, disabled until SAMPLE_SHARE_ID set
-  showSampleSplatButton();
 }
 
-function showSampleSplatButton() {
-  const existing = document.getElementById('sampleSplatBtn');
-  if (existing) return;
-  const hasId = !!SAMPLE_SHARE_ID;
-  const runBtn = document.getElementById('runBtn');
-  const btn = document.createElement('button');
-  btn.id = 'sampleSplatBtn';
-  btn.textContent = '▶ Load sample splat';
-  btn.disabled = !hasId;
-  btn.title = hasId ? 'Load pre-computed sample 3D splat' : 'Set SAMPLE_SHARE_ID in source to enable';
-  btn.style.cssText = 'width:100%;margin-top:8px;padding:9px 14px;background:rgba(184,134,74,0.12);border:1px solid rgba(184,134,74,0.40);color:' + (hasId ? 'var(--accent)' : 'var(--muted)') + ';font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:0.06em;cursor:' + (hasId ? 'pointer' : 'not-allowed') + ';border-radius:2px;opacity:' + (hasId ? '1' : '0.5') + ';transition:background 0.15s,border-color 0.15s;';
-  if (hasId) {
-    btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(184,134,74,0.22)'; btn.style.borderColor = 'rgba(184,134,74,0.65)'; });
-    btn.addEventListener('mouseleave', () => { btn.style.background = 'rgba(184,134,74,0.12)'; btn.style.borderColor = 'rgba(184,134,74,0.40)'; });
-    btn.addEventListener('click', () => { btn.remove(); loadFromShareId(SAMPLE_SHARE_ID); });
-  }
-  runBtn.parentNode.insertBefore(btn, runBtn.nextSibling);
-}
 
 </script>
   <div class="share-toast" id="shareToast">
