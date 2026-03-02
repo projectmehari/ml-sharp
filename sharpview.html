@@ -651,12 +651,26 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
   }
-  .depth-img-wrap {
-    height: 90px;
+  .depth-header:hover { background: rgba(255,252,248,0.65); }
+  .depth-toggle {
+    font-size: 9px;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    opacity: 0.7;
+  }
+  .depth-body {
     overflow: hidden;
+    transition: height 0.2s ease;
+  }
+  .depth-body.collapsed { height: 0 !important; }
+  .depth-img-wrap {
+    height: 140px;
     position: relative;
-    background: rgba(26,24,20,0.06);
+    background: rgba(26,24,20,0.08);
   }
   .depth-img-wrap canvas {
     width: 100%;
@@ -668,39 +682,29 @@
     bottom: 6px; right: 6px;
     font-size: 9px;
     padding: 2px 6px;
-    background: rgba(26,24,20,0.7);
-    color: rgba(234,230,222,0.8);
+    background: rgba(26,24,20,0.75);
+    color: rgba(234,230,222,0.85);
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
-
-  /* ─── MINIMAP ─── */
-  .minimap-wrap {
-    position: absolute;
-    bottom: 114px;
-    right: 12px;
-    width: 80px;
-    height: 80px;
-    z-index: 10;
-    border: 1px solid var(--glass-border);
-    background: rgba(255,252,248,0.55);
-    backdrop-filter: blur(10px);
-    overflow: hidden;
-    pointer-events: none;
+  .depth-legend {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 14px 5px;
+    background: rgba(255,252,248,0.30);
   }
-  #minimapCanvas {
-    width: 100%;
-    height: 100%;
-    display: block;
+  .depth-legend-bar {
+    flex: 1;
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(to right, #0d0887, #6a00a8, #b12a90, #e16462, #fca636, #f0f921);
   }
-  .minimap-label {
-    position: absolute;
-    top: 3px; left: 4px;
-    font-size: 8px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+  .depth-legend-label {
+    font-size: 9px;
     color: var(--muted);
-    pointer-events: none;
+    letter-spacing: 0.06em;
+    flex-shrink: 0;
   }
 
   /* ─── SCREENSHOT + SHARE BUTTONS ─── */
@@ -849,13 +853,20 @@
 
     <!-- Z-Depth preview — generated from PLY point cloud -->
     <div class="depth-panel" id="depthPanel">
-      <div class="depth-header">
+      <div class="depth-header" onclick="toggleDepthPanel()">
         <span>Depth Map · Z-Projection</span>
-        <span id="depthStatus" style="color:var(--muted)">—</span>
+        <span class="depth-toggle" id="depthToggle">▾ <span id="depthStatus">—</span></span>
       </div>
-      <div class="depth-img-wrap">
-        <canvas id="depthCanvas"></canvas>
-        <span class="depth-badge">Point Cloud Depth</span>
+      <div class="depth-body" id="depthBody">
+        <div class="depth-img-wrap">
+          <canvas id="depthCanvas"></canvas>
+          <span class="depth-badge">Point Cloud Depth</span>
+        </div>
+        <div class="depth-legend">
+          <span class="depth-legend-label">Far</span>
+          <div class="depth-legend-bar"></div>
+          <span class="depth-legend-label">Close</span>
+        </div>
       </div>
     </div>
 
@@ -890,11 +901,6 @@
 
     <canvas id="canvas3d"></canvas>
 
-    <!-- Minimap overlay -->
-    <div class="minimap-wrap" id="minimapWrap" style="display:none">
-      <span class="minimap-label">Top</span>
-      <canvas id="minimapCanvas" width="80" height="80"></canvas>
-    </div>
 
     <div class="canvas-placeholder" id="placeholder">
       <div class="placeholder-inner">
@@ -1160,9 +1166,6 @@ function initRenderer() {
 
   setupOrbit(canvas);
   animate();
-
-  // Init minimap after renderer is ready
-  setTimeout(initMinimap, 100);
 }
 
 function setupOrbit(canvas) {
@@ -1203,70 +1206,8 @@ function setupOrbit(canvas) {
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 }
 
-// ─── MINIMAP ─────────────────────────────────────────────────────────────────
-let minimapRenderer = null, minimapCamera = null, minimapScene = null;
-let minimapCloud = null, minimapCone = null;
-let minimapNeedsRebuild = false;
 
-function initMinimap() {
-  const canvas = document.getElementById('minimapCanvas');
-  if (!canvas || minimapRenderer) return;
-
-  minimapRenderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: true });
-  minimapRenderer.setSize(80, 80);
-  minimapRenderer.setClearColor(0xeae6de, 0.0);
-
-  minimapCamera = new THREE.OrthographicCamera(-2.5, 2.5, 2.5, -2.5, 0.01, 200);
-  minimapCamera.position.set(0, 10, 0);
-  minimapCamera.lookAt(0, 0, 0);
-
-  minimapScene = new THREE.Scene();
-  document.getElementById('minimapWrap').style.display = 'block';
-}
-
-// Call this once after a new point cloud is loaded — shares geometry, no clone
-function rebuildMinimapCloud() {
-  if (!minimapScene) return;
-  if (minimapCloud) { minimapScene.remove(minimapCloud); minimapCloud = null; }
-  if (minimapCone)  { minimapScene.remove(minimapCone);  minimapCone = null; }
-
-  if (pointCloud) {
-    // SHARE the geometry (no clone) — just use a different material + scale
-    const miniMat = new THREE.PointsMaterial({
-      size: 0.03, vertexColors: true, sizeAttenuation: true,
-    });
-    minimapCloud = new THREE.Points(pointCloud.geometry, miniMat);
-    minimapScene.add(minimapCloud);
-  }
-
-  // Camera cone indicator
-  const geo = new THREE.ConeGeometry(0.12, 0.35, 4);
-  const mat = new THREE.MeshBasicMaterial({ color: 0xb8864a, wireframe: true });
-  minimapCone = new THREE.Mesh(geo, mat);
-  minimapCone.rotation.x = Math.PI / 2;
-  minimapScene.add(minimapCone);
-  minimapNeedsRebuild = false;
-}
-
-function updateMinimap() {
-  if (!minimapRenderer || !minimapScene || !minimapCamera) return;
-  if (minimapNeedsRebuild) rebuildMinimapCloud();
-  if (!minimapCloud) return;
-
-  // Just sync transform — no geometry work
-  minimapCloud.rotation.copy(pointCloud.rotation);
-  minimapCloud.position.copy(pointCloud.position);
-  minimapCloud.scale.copy(pointCloud.scale);
-
-  // Move camera cone to show viewer position
-  if (minimapCone) {
-    minimapCone.position.set(panX, 0, Math.min(zoom * 0.25, 2));
-  }
-
-  minimapRenderer.render(minimapScene, minimapCamera);
-}
-
-// animate() is defined below with auto-rotate support
+// ─── PLY PARSER ──────────────────────────────────────────────────────────────
 
 // ─── PLY PARSER ──────────────────────────────────────────────────────────────
 // Handles both ASCII and binary PLY files from SHARP
@@ -1323,9 +1264,6 @@ function renderPLYToScene(buffer) {
 
     // Generate Z-depth preview from parsed positions
     renderDepthFromPLY(positions);
-
-    // Signal minimap to rebuild with new cloud (shares geometry, no clone)
-    minimapNeedsRebuild = true;
 
     // Reset camera to centered front view
     zoom = 2.8;
@@ -1648,7 +1586,6 @@ function animate() {
     rotY = pointCloud.rotation.y;
   }
   if (renderer3D && scene3D && camera3D) renderer3D.render(scene3D, camera3D);
-  if (animFrame % 30 === 0) updateMinimap();
 }
 
 // ─── ZOOM BUTTONS + KEYBOARD ─────────────────────────────────────────────────
@@ -1757,76 +1694,118 @@ function setDensity(val) {
 }
 
 // ─── Z-DEPTH PREVIEW (generated from PLY point cloud) ────────────────────────
+// ─── Z-DEPTH PREVIEW ─────────────────────────────────────────────────────────
+let depthPanelCollapsed = false;
+
+function toggleDepthPanel() {
+  depthPanelCollapsed = !depthPanelCollapsed;
+  const body   = document.getElementById('depthBody');
+  const toggle = document.getElementById('depthToggle');
+  if (depthPanelCollapsed) {
+    body.style.height = body.scrollHeight + 'px';
+    requestAnimationFrame(() => { body.style.height = '0px'; });
+    body.classList.add('collapsed');
+    toggle.innerHTML = '▸ <span id="depthStatus">' + document.getElementById('depthStatus').textContent + '</span>';
+  } else {
+    body.classList.remove('collapsed');
+    body.style.height = body.scrollHeight + 'px';
+    setTimeout(() => { body.style.height = ''; }, 220);
+    toggle.innerHTML = '▾ <span id="depthStatus">' + document.getElementById('depthStatus').textContent + '</span>';
+  }
+}
+
 function renderDepthFromPLY(positions) {
   const panel  = document.getElementById('depthPanel');
   const canvas = document.getElementById('depthCanvas');
-  const status = document.getElementById('depthStatus');
   if (!canvas || !positions || positions.length === 0) return;
 
-  // Size canvas to fit the panel
   const W = canvas.parentElement.clientWidth || 300;
-  const H = 90;
+  const H = 140;
   canvas.width  = W;
   canvas.height = H;
   const ctx = canvas.getContext('2d');
-
   const N = positions.length / 3;
 
-  // Find X/Y/Z range for normalization
+  // Find X/Y/Z bounds
   let xMin=Infinity, xMax=-Infinity, yMin=Infinity, yMax=-Infinity, zMin=Infinity, zMax=-Infinity;
   for (let i = 0; i < N; i++) {
-    const x = positions[i*3], y = positions[i*3+1], z = positions[i*3+2];
-    if (x < xMin) xMin=x; if (x > xMax) xMax=x;
-    if (y < yMin) yMin=y; if (y > yMax) yMax=y;
-    if (z < zMin) zMin=z; if (z > zMax) zMax=z;
+    const x=positions[i*3], y=positions[i*3+1], z=positions[i*3+2];
+    if(x<xMin)xMin=x; if(x>xMax)xMax=x;
+    if(y<yMin)yMin=y; if(y>yMax)yMax=y;
+    if(z<zMin)zMin=z; if(z>zMax)zMax=z;
   }
-  const xRange = xMax - xMin || 1;
-  const yRange = yMax - yMin || 1;
-  const zRange = zMax - zMin || 1;
+  const xRange=xMax-xMin||1, yRange=yMax-yMin||1, zRange=zMax-zMin||1;
 
-  // Accumulate depth into grid — use max Z (closest to camera) per pixel
-  const grid = new Float32Array(W * H).fill(-Infinity);
+  // Project to grid — take max Z (closest) per pixel
+  const grid = new Float32Array(W * H).fill(-1);
   for (let i = 0; i < N; i++) {
-    const px = Math.floor(((positions[i*3]   - xMin) / xRange) * (W - 1));
-    const py = Math.floor(((positions[i*3+1] - yMin) / yRange) * (H - 1));
-    const pz = (positions[i*3+2] - zMin) / zRange; // 0=far, 1=close
-    const idx = py * W + px;
+    const px = Math.floor(((positions[i*3]  -xMin)/xRange)*(W-1));
+    const py = Math.floor(((positions[i*3+1]-yMin)/yRange)*(H-1));
+    const pz = (positions[i*3+2]-zMin)/zRange;
+    const idx = py*W+px;
     if (pz > grid[idx]) grid[idx] = pz;
   }
 
-  // Fill gaps with nearest neighbour (simple 3x3 max blur)
+  // Dilate to fill sparse gaps (3×3 max)
   const filled = new Float32Array(grid);
-  for (let y = 1; y < H-1; y++) {
-    for (let x = 1; x < W-1; x++) {
-      if (filled[y*W+x] === -Infinity) {
-        let best = -Infinity;
-        for (let dy = -1; dy <= 1; dy++)
-          for (let dx = -1; dx <= 1; dx++) {
-            const v = grid[(y+dy)*W+(x+dx)];
-            if (v > best) best = v;
-          }
-        filled[y*W+x] = best;
+  for (let pass = 0; pass < 2; pass++) {
+    for (let y=1; y<H-1; y++) for (let x=1; x<W-1; x++) {
+      if (filled[y*W+x] < 0) {
+        let best = -1;
+        for (let dy=-1;dy<=1;dy++) for (let dx=-1;dx<=1;dx++) {
+          const v=filled[(y+dy)*W+(x+dx)];
+          if(v>best) best=v;
+        }
+        if (best >= 0) filled[y*W+x] = best * 0.92; // slight falloff for gaps
       }
     }
   }
 
-  // Draw with viridis-inspired colormap: far=dark blue, close=yellow
+  // Plasma colormap (perceptually uniform, great for depth)
+  // dark purple=far → magenta → orange → yellow=close
+  function plasma(t) {
+    // Sampled from matplotlib plasma
+    const r = Math.round(255 * Math.max(0, Math.min(1,
+      t < 0.25 ? 0.05 + t*4*0.45 :
+      t < 0.5  ? 0.50 + (t-0.25)*4*0.38 :
+      t < 0.75 ? 0.88 + (t-0.5)*4*0.09 : 0.97 - (t-0.75)*4*0.02)));
+    const g = Math.round(255 * Math.max(0, Math.min(1,
+      t < 0.25 ? 0.00 + t*4*0.07 :
+      t < 0.5  ? 0.07 + (t-0.25)*4*0.27 :
+      t < 0.75 ? 0.34 + (t-0.5)*4*0.36 : 0.70 + (t-0.75)*4*0.24)));
+    const b = Math.round(255 * Math.max(0, Math.min(1,
+      t < 0.25 ? 0.50 + t*4*0.14 :
+      t < 0.5  ? 0.64 - (t-0.25)*4*0.30 :
+      t < 0.75 ? 0.34 - (t-0.5)*4*0.26 : 0.08 - (t-0.75)*4*0.06)));
+    return [r, g, b];
+  }
+
   const img = ctx.createImageData(W, H);
-  for (let i = 0; i < W * H; i++) {
-    const t = filled[i] === -Infinity ? 0 : filled[i]; // 0=far, 1=close
-    // Turbo-style: dark → blue → cyan → green → yellow → orange
-    const r = Math.floor(Math.max(0, Math.min(255, t < 0.5 ? t*2*60 : 60 + (t-0.5)*2*195)));
-    const g = Math.floor(Math.max(0, Math.min(255, t < 0.25 ? t*4*80 : t < 0.75 ? 80+(t-0.25)*2*175 : 255-(t-0.75)*4*100)));
-    const b = Math.floor(Math.max(0, Math.min(255, t < 0.5 ? 100+(t*2*155) : 255-(t-0.5)*2*245)));
-    img.data[i*4]   = r;
-    img.data[i*4+1] = g;
-    img.data[i*4+2] = b;
-    img.data[i*4+3] = filled[i] === -Infinity ? 40 : 255;
+  for (let i = 0; i < W*H; i++) {
+    const t = filled[i];
+    if (t < 0) {
+      img.data[i*4+3] = 0; // transparent for unfilled
+    } else {
+      const [r,g,b] = plasma(t);
+      img.data[i*4]   = r;
+      img.data[i*4+1] = g;
+      img.data[i*4+2] = b;
+      img.data[i*4+3] = 255;
+    }
   }
   ctx.putImageData(img, 0, 0);
 
-  panel.classList.add('visible');
+  // Update status
+  const status = document.getElementById('depthStatus');
   if (status) status.textContent = `${(N/1000).toFixed(0)}k pts`;
+
+  // Show panel (open if collapsed)
+  panel.classList.add('visible');
+  depthPanelCollapsed = false;
+  const body = document.getElementById('depthBody');
+  if (body) { body.classList.remove('collapsed'); body.style.height = ''; }
+  const toggle = document.getElementById('depthToggle');
+  if (toggle) toggle.innerHTML = `▾ <span id="depthStatus">${(N/1000).toFixed(0)}k pts</span>`;
 }
 
 // ─── DEPTH FOG ────────────────────────────────────────────────────────────────
