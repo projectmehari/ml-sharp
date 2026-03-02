@@ -390,56 +390,7 @@
   .timer.visible { opacity: 1; }
 
   /* ─── MODAL CONFIG BANNER ─── */
-  .modal-banner {
-    margin: 0 16px 8px;
-    padding: 8px 12px;
-    border: 1px solid var(--glass-border);
-    background: var(--glass);
-    backdrop-filter: blur(10px);
-    font-size: 10px;
-    color: var(--muted);
-    display: none;
-    align-items: center;
-    gap: 10px;
-    flex-shrink: 0;
-    border-radius: 3px;
-  }
-  .modal-banner.visible { display: flex; }
-  .modal-banner input {
-    flex: 1;
-    background: transparent;
-    border: none;
-    border-bottom: 1px solid var(--glass-border);
-    color: var(--text);
-    font-family: var(--mono);
-    font-size: 10px;
-    padding: 2px 4px;
-    outline: none;
-  }
-  .modal-banner input:focus { border-bottom-color: var(--accent); }
-  .modal-banner input::placeholder { color: var(--muted); }
 
-  /* Info toggle row */
-  .info-toggle-row {
-    padding: 6px 16px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-shrink: 0;
-  }
-  .toggle-btn {
-    font-size: 10px;
-    color: var(--muted);
-    background: rgba(255,252,248,0.60);
-    border: 1px solid var(--glass-border);
-    font-family: var(--mono);
-    padding: 2px 8px;
-    cursor: pointer;
-    letter-spacing: 0.06em;
-    transition: all 0.15s;
-    border-radius: 2px;
-  }
-  .toggle-btn:hover { color: var(--text); border-color: var(--glass-bright); }
 
   /* ─── VIEWER ─── */
   .viewer-panel { display: flex; flex-direction: column; }
@@ -563,7 +514,7 @@
     .main {
       grid-template-columns: 1fr;
       height: auto;
-      min-height: 100vh;
+      min-height: 0;
     }
     .panel {
       min-height: 0;
@@ -1004,6 +955,8 @@
   /* ─── MOBILE STATUS STRIP ─── */
   .mobile-status-strip {
     display: none;
+    position: relative;
+    z-index: 10;
     align-items: center;
     gap: 8px;
     padding: 6px 16px;
@@ -1032,7 +985,7 @@
   <div class="header-right">
     <div class="header-badges">
       <span class="badge complete" id="statusBadge">Idle</span>
-      <span class="badge docs" onclick="window.open('https://github.com/projectmehari/ml-sharp','_blank')">GitHub</span>
+      <span class="badge docs" onclick="window.open('https://github.com/projectmehari/SharpView','_blank')">GitHub</span>
       <span class="badge online">Online</span>
     </div>
     <div style="font-size:11px;color:var(--muted)">45.5017° N, 73.5673° W</div>
@@ -1109,7 +1062,7 @@
     <div class="depth-panel" id="depthPanel">
       <div class="depth-header" onclick="toggleDepthPanel()">
         <span>Depth Map · Z-Projection</span>
-        <span class="depth-toggle" id="depthToggle">▾ <span id="depthStatus">—</span></span>
+        <span class="depth-toggle" id="depthToggle"><span class="depth-arrow">▾</span> <span id="depthStatus">—</span></span>
       </div>
       <div class="depth-body" id="depthBody">
         <div class="depth-img-wrap">
@@ -1866,13 +1819,6 @@ function download(blob, filename) {
 }
 
 
-// ─── INFO TOGGLE ─────────────────────────────────────────────────────────────
-let infoVisible = false;
-function toggleInfo() {
-  infoVisible = !infoVisible;
-  document.getElementById('modalBanner').classList.toggle('visible', infoVisible);
-  document.querySelector('.toggle-btn').textContent = infoVisible ? 'info ▴' : 'info ▾';
-}
 
 // ─── STATUS BADGE ─────────────────────────────────────────────────────────────
 function setStatusBadge(state, text) {
@@ -2030,16 +1976,23 @@ function toggleDepthPanel() {
   depthPanelCollapsed = !depthPanelCollapsed;
   const body   = document.getElementById('depthBody');
   const toggle = document.getElementById('depthToggle');
+  const statusEl = document.getElementById('depthStatus');
+  const statusText = statusEl ? statusEl.textContent : '—';
   if (depthPanelCollapsed) {
     body.style.height = body.scrollHeight + 'px';
     requestAnimationFrame(() => { body.style.height = '0px'; });
     body.classList.add('collapsed');
-    toggle.innerHTML = '▸ <span id="depthStatus">' + document.getElementById('depthStatus').textContent + '</span>';
+    // Update arrow only — preserve existing #depthStatus span
+    const arrow = toggle.querySelector('.depth-arrow');
+    if (arrow) arrow.textContent = '▸';
+    else toggle.firstChild.textContent = '▸ ';
   } else {
     body.classList.remove('collapsed');
     body.style.height = body.scrollHeight + 'px';
     setTimeout(() => { body.style.height = ''; }, 220);
-    toggle.innerHTML = '▾ <span id="depthStatus">' + document.getElementById('depthStatus').textContent + '</span>';
+    const arrow = toggle.querySelector('.depth-arrow');
+    if (arrow) arrow.textContent = '▾';
+    else toggle.firstChild.textContent = '▾ ';
   }
 }
 
@@ -2134,7 +2087,7 @@ function renderDepthFromPLY(positions) {
   const body = document.getElementById('depthBody');
   if (body) { body.classList.remove('collapsed'); body.style.height = ''; }
   const toggle = document.getElementById('depthToggle');
-  if (toggle) toggle.innerHTML = `▾ <span id="depthStatus">${(N/1000).toFixed(0)}k pts</span>`;
+  if (toggle) { const s = toggle.querySelector('#depthStatus'); if (s) s.textContent = `${(N/1000).toFixed(0)}k pts`; }
 }
 
 // ─── DEPTH FOG ────────────────────────────────────────────────────────────────
