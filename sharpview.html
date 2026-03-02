@@ -632,6 +632,7 @@
   }
 
   /* ─── DEPTH MAP PREVIEW ─── */
+  /* ─── Z-DEPTH PREVIEW ─── */
   .depth-panel {
     display: none;
     flex-direction: column;
@@ -652,17 +653,15 @@
     align-items: center;
   }
   .depth-img-wrap {
-    height: 110px;
+    height: 90px;
     overflow: hidden;
     position: relative;
     background: rgba(26,24,20,0.06);
   }
-  .depth-img-wrap img {
+  .depth-img-wrap canvas {
     width: 100%;
     height: 100%;
-    object-fit: cover;
     display: block;
-    filter: grayscale(0.3) contrast(1.1);
   }
   .depth-badge {
     position: absolute;
@@ -848,15 +847,15 @@
 
     <div class="divider"></div>
 
-    <!-- Depth map preview -->
+    <!-- Z-Depth preview — generated from PLY point cloud -->
     <div class="depth-panel" id="depthPanel">
       <div class="depth-header">
-        <span>Depth Map · SHARP Output</span>
+        <span>Depth Map · Z-Projection</span>
         <span id="depthStatus" style="color:var(--muted)">—</span>
       </div>
       <div class="depth-img-wrap">
-        <img id="depthImg" src="" alt="depth map">
-        <span class="depth-badge">Monocular Depth</span>
+        <canvas id="depthCanvas"></canvas>
+        <span class="depth-badge">Point Cloud Depth</span>
       </div>
     </div>
 
@@ -1091,14 +1090,13 @@ async function runInference() {
 
     // Handle both old binary PLY response AND new JSON envelope
     const contentType = resp.headers.get('content-type') || '';
-    let plyBuffer, shareId = null, depthB64 = null;
+    let plyBuffer, shareId = null;
 
     if (contentType.includes('application/json')) {
-      // New backend: JSON with base64 PLY + depth + share_id
+      // New backend: JSON with base64 PLY + share_id
       const json = await resp.json();
       plyBuffer = base64ToArrayBuffer(json.ply_b64);
       shareId = json.share_id || null;
-      depthB64 = json.depth_b64 || null;
     } else {
       // Old backend: raw binary PLY
       plyBuffer = await resp.arrayBuffer();
@@ -1115,9 +1113,6 @@ async function runInference() {
     setProgress('complete');
     renderPLYToScene(plyBuffer);
     enableExports();
-
-    // Show depth map if available (new backend only)
-    if (depthB64) showDepthMap(depthB64);
 
     // Enable screenshot always, share only if we have an ID
     document.getElementById('screenshotBtn').disabled = false;
@@ -1325,6 +1320,9 @@ function renderPLYToScene(buffer) {
       `<span>${(N / 1000).toFixed(0)}k</span> gaussians`;
 
     addLog('ok', `rendered · ${(N / 1000).toFixed(0)}k points`);
+
+    // Generate Z-depth preview from parsed positions
+    renderDepthFromPLY(positions);
 
     // Signal minimap to rebuild with new cloud (shares geometry, no clone)
     minimapNeedsRebuild = true;
@@ -1758,14 +1756,77 @@ function setDensity(val) {
   document.getElementById('pointCount').innerHTML = `<span>${(keepN/1000).toFixed(0)}k</span> gaussians`;
 }
 
-// ─── DEPTH MAP PREVIEW ────────────────────────────────────────────────────────
-function showDepthMap(b64) {
-  const panel = document.getElementById('depthPanel');
-  const img   = document.getElementById('depthImg');
+// ─── Z-DEPTH PREVIEW (generated from PLY point cloud) ────────────────────────
+function renderDepthFromPLY(positions) {
+  const panel  = document.getElementById('depthPanel');
+  const canvas = document.getElementById('depthCanvas');
   const status = document.getElementById('depthStatus');
-  img.src = 'data:image/png;base64,' + b64;
+  if (!canvas || !positions || positions.length === 0) return;
+
+  // Size canvas to fit the panel
+  const W = canvas.parentElement.clientWidth || 300;
+  const H = 90;
+  canvas.width  = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  const N = positions.length / 3;
+
+  // Find X/Y/Z range for normalization
+  let xMin=Infinity, xMax=-Infinity, yMin=Infinity, yMax=-Infinity, zMin=Infinity, zMax=-Infinity;
+  for (let i = 0; i < N; i++) {
+    const x = positions[i*3], y = positions[i*3+1], z = positions[i*3+2];
+    if (x < xMin) xMin=x; if (x > xMax) xMax=x;
+    if (y < yMin) yMin=y; if (y > yMax) yMax=y;
+    if (z < zMin) zMin=z; if (z > zMax) zMax=z;
+  }
+  const xRange = xMax - xMin || 1;
+  const yRange = yMax - yMin || 1;
+  const zRange = zMax - zMin || 1;
+
+  // Accumulate depth into grid — use max Z (closest to camera) per pixel
+  const grid = new Float32Array(W * H).fill(-Infinity);
+  for (let i = 0; i < N; i++) {
+    const px = Math.floor(((positions[i*3]   - xMin) / xRange) * (W - 1));
+    const py = Math.floor(((positions[i*3+1] - yMin) / yRange) * (H - 1));
+    const pz = (positions[i*3+2] - zMin) / zRange; // 0=far, 1=close
+    const idx = py * W + px;
+    if (pz > grid[idx]) grid[idx] = pz;
+  }
+
+  // Fill gaps with nearest neighbour (simple 3x3 max blur)
+  const filled = new Float32Array(grid);
+  for (let y = 1; y < H-1; y++) {
+    for (let x = 1; x < W-1; x++) {
+      if (filled[y*W+x] === -Infinity) {
+        let best = -Infinity;
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++) {
+            const v = grid[(y+dy)*W+(x+dx)];
+            if (v > best) best = v;
+          }
+        filled[y*W+x] = best;
+      }
+    }
+  }
+
+  // Draw with viridis-inspired colormap: far=dark blue, close=yellow
+  const img = ctx.createImageData(W, H);
+  for (let i = 0; i < W * H; i++) {
+    const t = filled[i] === -Infinity ? 0 : filled[i]; // 0=far, 1=close
+    // Turbo-style: dark → blue → cyan → green → yellow → orange
+    const r = Math.floor(Math.max(0, Math.min(255, t < 0.5 ? t*2*60 : 60 + (t-0.5)*2*195)));
+    const g = Math.floor(Math.max(0, Math.min(255, t < 0.25 ? t*4*80 : t < 0.75 ? 80+(t-0.25)*2*175 : 255-(t-0.75)*4*100)));
+    const b = Math.floor(Math.max(0, Math.min(255, t < 0.5 ? 100+(t*2*155) : 255-(t-0.5)*2*245)));
+    img.data[i*4]   = r;
+    img.data[i*4+1] = g;
+    img.data[i*4+2] = b;
+    img.data[i*4+3] = filled[i] === -Infinity ? 40 : 255;
+  }
+  ctx.putImageData(img, 0, 0);
+
   panel.classList.add('visible');
-  if (status) status.textContent = 'received';
+  if (status) status.textContent = `${(N/1000).toFixed(0)}k pts`;
 }
 
 // ─── DEPTH FOG ────────────────────────────────────────────────────────────────
@@ -1831,23 +1892,26 @@ function closeShareToast() {
 async function loadFromShareId(shareId) {
   addLog('info', `loading shared splat · ${shareId}…`);
   setStatusBadge('complete', 'Loading…');
-  if (renderer3D) setProgress('indeterminate');
+  document.getElementById('statusLabel').textContent = 'loading share…';
   try {
     const resp = await fetch(`${MODAL_BASE}/share/${shareId}`);
-    if (!resp.ok) throw new Error('Share not found or expired');
+    if (!resp.ok) throw new Error(`Share not found or expired (${resp.status})`);
     const buf = await resp.arrayBuffer();
     generatedPLYBuffer = buf;
     currentShareId = shareId;
-    renderPLYToScene(buf);
+    renderPLYToScene(buf); // also calls renderDepthFromPLY internally
     enableExports();
     document.getElementById('screenshotBtn').disabled = false;
     document.getElementById('shareBtn').disabled = false;
+    document.getElementById('runBtn').disabled = false;
     setProgress('complete');
     addLog('ok', `loaded shared splat · ${shareId}`);
     setStatusBadge('complete', 'Loaded');
+    document.getElementById('statusLabel').textContent = 'shared splat';
   } catch (e) {
     addLog('err', e.message);
     setStatusBadge('complete', 'Error');
+    document.getElementById('statusLabel').textContent = 'error';
   }
 }
 

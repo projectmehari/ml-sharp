@@ -29,10 +29,10 @@ app = modal.App("sharpview", image=image)
 CHECKPOINT = "/root/.cache/torch/hub/checkpoints/sharp_2572gikvuh.pt"
 
 # Modal Dict for shareable PLY storage (persists across containers)
-# Each entry: { "ply": <bytes>, "filename": str, "created": float }
 ply_store = modal.Dict.from_name("sharpview-ply-store", create_if_missing=True)
 
-# Custom CORS: echoes back whatever origin the browser sends.
+
+# Custom CORS: echoes back whatever origin the browser sends (handles null from file://)
 class PermissiveCORS(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         origin = request.headers.get("origin") or "*"
@@ -52,6 +52,7 @@ class PermissiveCORS(BaseHTTPMiddleware):
         response.headers["Access-Control-Allow-Headers"] = "*"
         return response
 
+
 fastapi_app = FastAPI()
 fastapi_app.add_middleware(PermissiveCORS)
 
@@ -63,7 +64,7 @@ def health():
 
 @fastapi_app.post("/predict")
 async def predict(request: Request):
-    import tempfile, subprocess, os, pathlib, uuid, time
+    import base64, tempfile, subprocess, os, pathlib, uuid, time
 
     content_type = request.headers.get("content-type", "")
     ext = ".jpg"
@@ -93,7 +94,6 @@ async def predict(request: Request):
     if not image_bytes:
         return JSONResponse({"error": "empty body"}, status_code=400)
 
-    # Also capture depth map from SHARP output
     print(f"Image received: {len(image_bytes)} bytes, ext={ext}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -127,84 +127,58 @@ async def predict(request: Request):
         ply_bytes = ply_files[0].read_bytes()
         print(f"PLY: {len(ply_bytes)//1024}kb")
 
-        # Look for depth map (SHARP outputs depth as PNG/EXR alongside PLY)
-        depth_bytes = None
-        depth_b64 = None
-        for ext_try in ["*.png", "*.jpg", "*.exr"]:
-            depth_files = [f for f in pathlib.Path(output_dir).glob(f"**/{ext_try}")
-                          if "depth" in f.name.lower() or "disp" in f.name.lower()]
-            if depth_files:
-                depth_bytes = depth_files[0].read_bytes()
-                break
-
-        # If no labeled depth file, grab any PNG output that isn't the input
-        if not depth_bytes:
-            all_pngs = [f for f in pathlib.Path(output_dir).glob("**/*.png")]
-            if all_pngs:
-                depth_bytes = all_pngs[0].read_bytes()
-
-        if depth_bytes:
-            import base64
-            depth_b64 = base64.b64encode(depth_bytes).decode()
-
-        # Store in Modal Dict — encode PLY as base64 string (Modal Dict handles str/dicts reliably; raw bytes can fail)
-        import base64 as _b64
+        # Store in Modal Dict using async API (avoids AsyncUsageWarning)
         share_id = str(uuid.uuid4())[:8]
         try:
-            ply_store[share_id] = {
-                "ply_b64": _b64.b64encode(ply_bytes).decode(),
+            await ply_store.put.aio(share_id, {
+                "ply_b64": base64.b64encode(ply_bytes).decode(),
                 "filename": pathlib.Path(filename).stem,
                 "created": time.time(),
-            }
+            })
             print(f"Stored share_id={share_id}")
         except Exception as e:
             print(f"Share store error (non-fatal): {e}")
             share_id = None
 
-        # Return multipart response: ply + depth + share_id as JSON envelope
-        import json
-        response_data = {
+        return JSONResponse({
             "share_id": share_id,
-            "ply_b64": __import__('base64').b64encode(ply_bytes).decode(),
-            "depth_b64": depth_b64,
+            "ply_b64": base64.b64encode(ply_bytes).decode(),
             "ply_size": len(ply_bytes),
-        }
-
-        return JSONResponse(response_data)
+        })
 
 
 @fastapi_app.get("/share/{share_id}")
 async def get_share(share_id: str):
     """Return the PLY file for a given share ID."""
-    import base64 as _b64
+    import base64
     try:
-        entry = ply_store[share_id]
-    except KeyError:
+        entry = await ply_store.get.aio(share_id)
+    except Exception:
+        return JSONResponse({"error": "share not found or expired"}, status_code=404)
+    if entry is None:
         return JSONResponse({"error": "share not found or expired"}, status_code=404)
 
-    # Support both old (raw bytes) and new (base64 string) storage formats
     ply_data = entry.get("ply_b64")
-    if ply_data:
-        ply_bytes = _b64.b64decode(ply_data)
-    else:
-        ply_bytes = entry.get("ply", b"")
+    ply_bytes = base64.b64decode(ply_data) if ply_data else entry.get("ply", b"")
 
     return Response(
         content=ply_bytes,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{entry.get("filename","output")}.ply"'},
+        headers={"Content-Disposition": f'attachment; filename="{entry.get("filename", "output")}.ply"'},
     )
 
 
 @fastapi_app.get("/share/{share_id}/info")
 async def get_share_info(share_id: str):
     """Return metadata for a share link."""
-    import time, base64 as _b64
+    import base64
     try:
-        entry = ply_store[share_id]
-    except KeyError:
+        entry = await ply_store.get.aio(share_id)
+    except Exception:
         return JSONResponse({"error": "not found"}, status_code=404)
-    ply_size = len(_b64.b64decode(entry["ply_b64"])) if "ply_b64" in entry else len(entry.get("ply", b""))
+    if entry is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    ply_size = len(base64.b64decode(entry["ply_b64"])) if "ply_b64" in entry else 0
     return {
         "share_id": share_id,
         "filename": entry.get("filename"),
@@ -217,7 +191,7 @@ async def get_share_info(share_id: str):
     image=image,
     gpu="A10G",
     timeout=120,
-    container_idle_timeout=60,
+    scaledown_window=60,   # fixed: was container_idle_timeout
 )
 @modal.asgi_app()
 def serve():
